@@ -334,7 +334,6 @@ def main() -> None:
     """Start the bot"""
     max_retries = 3
     retry_delay = 5
-    application = None
     
     for attempt in range(max_retries):
         try:
@@ -346,7 +345,7 @@ def main() -> None:
             flask_thread.start()
             logger.info("✅ Flask server started on port 5000")
             
-            # Create application
+            # Create application - FIXED: Using simpler approach
             application = Application.builder().token(BOT_TOKEN).build()
             
             # Initialize bot instance and store in bot_data
@@ -378,7 +377,8 @@ def main() -> None:
             
             application.run_polling(
                 allowed_updates=Update.ALL_TYPES, 
-                drop_pending_updates=True
+                drop_pending_updates=True,
+                close_loop=False  # Important for Render
             )
             break
             
@@ -389,10 +389,7 @@ def main() -> None:
                 time.sleep(retry_delay)
             else:
                 logger.error("❌ Failed to start bot after all retries")
-        finally:
-            # Close database
-            if application and 'bot_instance' in application.bot_data:
-                application.bot_data['bot_instance'].db.close()
+                raise
 
 if __name__ == '__main__':
     main()
