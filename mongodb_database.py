@@ -1,47 +1,53 @@
 # mongodb_database.py - MongoDB operations
-
 import logging
+from typing import List, Tuple, Optional, Any, Dict
 from pymongo import MongoClient
+from pymongo.collection import Collection
 from datetime import datetime
 import os
 
 logger = logging.getLogger(__name__)
 
 class MongoDBDatabase:
-    def __init__(self):
+    def __init__(self) -> None:
+        self.client: Optional[MongoClient] = None
+        self.db: Optional[Any] = None
+        self.channels: Optional[Collection] = None
+        self.member_counts: Optional[Collection] = None
+        self.broadcasts: Optional[Collection] = None
         self.init_database()
-
-    def init_database(self):
+    
+    def init_database(self) -> None:
         """Initialize MongoDB connection"""
         try:
-            # MongoDB connection URL from environment variable
             mongodb_url = os.getenv('MONGODB_URL', '')
+            if not mongodb_url:
+                raise ValueError("MONGODB_URL environment variable is not set")
+            
             self.client = MongoClient(mongodb_url)
             self.db = self.client['channel_bot_db']
-
+            
             # Create collections
             self.channels = self.db['channels']
             self.member_counts = self.db['member_counts']
             self.broadcasts = self.db['broadcasts']
-
+            
             # Create indexes
             self.channels.create_index('channel_id', unique=True)
             self.member_counts.create_index([('channel_id', 1), ('record_date', -1)])
-
+            
             logger.info("✅ MongoDB initialized successfully")
-
         except Exception as e:
             logger.error(f"❌ MongoDB connection error: {e}")
             raise
-
-    def register_channel(self, channel_id, channel_name=None, channel_username=None):
+    
+    def register_channel(self, channel_id: int, channel_name: Optional[str] = None, 
+                        channel_username: Optional[str] = None) -> Tuple[bool, str]:
         """Register channel in database"""
         try:
-            # Check if channel already exists
             existing_channel = self.channels.find_one({'channel_id': str(channel_id)})
-
+            
             if existing_channel:
-                # Update activity for existing channel
                 self.channels.update_one(
                     {'channel_id': str(channel_id)},
                     {
@@ -54,8 +60,7 @@ class MongoDBDatabase:
                 logger.info(f"📊 Channel activity updated: {channel_id}")
                 return False, "Channel already registered. Activity updated!"
             else:
-                # Register new channel
-                channel_data = {
+                channel_data: Dict[str, Any] = {
                     'channel_id': str(channel_id),
                     'channel_name': channel_name,
                     'channel_username': channel_username,
@@ -65,16 +70,15 @@ class MongoDBDatabase:
                     'last_activity': datetime.now(),
                     'current_members': 0
                 }
-
                 self.channels.insert_one(channel_data)
                 logger.info(f"✅ New channel registered: {channel_id} - {channel_name}")
                 return True, "✅ Channel registered successfully!"
-
+                
         except Exception as e:
             logger.error(f"❌ Registration error: {e}")
             return False, f"❌ Registration failed: {str(e)}"
-
-    def increment_forward_count(self, channel_id):
+    
+    def increment_forward_count(self, channel_id: int) -> None:
         """Increment forward message count"""
         try:
             self.channels.update_one(
@@ -86,16 +90,15 @@ class MongoDBDatabase:
             )
         except Exception as e:
             logger.error(f"❌ Forward count error: {e}")
-
-    def get_registered_channels(self):
+    
+    def get_registered_channels(self) -> List[Tuple]:
         """Get all registered channels"""
         try:
             channels = list(self.channels.find(
                 {'is_active': True}
             ).sort('registered_date', -1))
-
-            # Convert MongoDB documents to tuple format for compatibility
-            result = []
+            
+            result: List[Tuple] = []
             for channel in channels:
                 result.append((
                     channel['channel_id'],
@@ -104,19 +107,16 @@ class MongoDBDatabase:
                     channel.get('registered_date', datetime.now()),
                     channel.get('forward_count', 0),
                     channel.get('last_activity', datetime.now()),
-                    channel.get('current_members', 0)  # Added current members
+                    channel.get('current_members', 0)
                 ))
-
             return result
-
         except Exception as e:
             logger.error(f"❌ Get channels error: {e}")
             return []
-
-    def update_channel_member_count(self, channel_id, member_count):
+    
+    def update_channel_member_count(self, channel_id: int, member_count: int) -> None:
         """Update channel member count and record in history"""
         try:
-            # Update current member count in channels collection
             self.channels.update_one(
                 {'channel_id': str(channel_id)},
                 {
@@ -126,27 +126,24 @@ class MongoDBDatabase:
                     }
                 }
             )
-
-            # Record in member_counts collection for history
+            
             member_count_record = {
                 'channel_id': str(channel_id),
                 'member_count': member_count,
                 'record_date': datetime.now()
             }
-
             self.member_counts.insert_one(member_count_record)
+            
             logger.info(f"Member count updated for channel: {channel_id} - {member_count}")
-
         except Exception as e:
             logger.error(f"Member count update error: {e}")
-
-    def get_today_growth(self, channel_id):
+    
+    def get_today_growth(self, channel_id: int) -> str:
         """Calculate today's member growth"""
         try:
             today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
             yesterday_start = today_start.replace(day=today_start.day-1)
-
-            # Get today's latest count
+            
             today_record = self.member_counts.find_one(
                 {
                     'channel_id': str(channel_id),
@@ -154,8 +151,7 @@ class MongoDBDatabase:
                 },
                 sort=[('record_date', -1)]
             )
-
-            # Get yesterday's latest count
+            
             yesterday_record = self.member_counts.find_one(
                 {
                     'channel_id': str(channel_id),
@@ -163,7 +159,7 @@ class MongoDBDatabase:
                 },
                 sort=[('record_date', -1)]
             )
-
+            
             if today_record and yesterday_record:
                 growth = today_record['member_count'] - yesterday_record['member_count']
                 return f"+{growth}" if growth > 0 else str(growth)
@@ -171,12 +167,12 @@ class MongoDBDatabase:
                 return "New tracking"
             else:
                 return "No data"
-
+                
         except Exception as e:
             logger.error(f"Growth calculation error: {e}")
             return "Error"
-
-    def close(self):
+    
+    def close(self) -> None:
         """Close MongoDB connection"""
         if self.client:
             self.client.close()
