@@ -10,6 +10,7 @@ from ban import ban_command, unban_command, broadcast_command, delete_command
 from flask import Flask
 from threading import Thread
 import time
+import asyncio
 
 # Flask app for uptimerobot pinging
 app = Flask(__name__)
@@ -23,15 +24,14 @@ def health():
     return "OK"
 
 def run_flask():
-    app.run(host='0.0.0.0', port=5000)
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
 
 # Logging setup
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO,
     handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler('bot.log')
+        logging.StreamHandler()
     ]
 )
 
@@ -330,70 +330,67 @@ async def admin_delete_command(update: Update, context: ContextTypes.DEFAULT_TYP
     await delete_command(update, context)
 
 def main():
-    """Start the bot"""
-    max_retries = 3
-    retry_delay = 5
-    application = None
+    """Start the bot with improved error handling"""
+    logger.info("🚀 Starting Telegram Channel Registration Bot...")
 
-    for attempt in range(max_retries):
+    # Start Flask server in a separate thread
+    flask_thread = Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+    logger.info("✅ Flask server started")
+
+    try:
+        # Create application with proper configuration
+        application = Application.builder().token(BOT_TOKEN).build()
+
+        # Initialize bot instance and store in bot_data
+        bot_instance = ChannelRegistrationBot()
+        application.bot_data['bot_instance'] = bot_instance
+
+        logger.info("✅ Bot instance created and configured")
+
+        # Add handlers
+        application.add_handler(CommandHandler("start", start))
+        application.add_handler(CommandHandler("help", help_command))
+        application.add_handler(CommandHandler("list", list_channels))
+        application.add_handler(CommandHandler("stats", stats))
+        application.add_handler(CommandHandler("ban", admin_ban_command))
+        application.add_handler(CommandHandler("unban", admin_unban_command))
+        application.add_handler(CommandHandler("broadcast", admin_broadcast_command))
+        application.add_handler(CommandHandler("del", admin_delete_command))
+
+        # Button handler
+        application.add_handler(CallbackQueryHandler(button_handler))
+
+        # Chat member handler
+        application.add_handler(ChatMemberHandler(handle_bot_added_to_channel, ChatMemberHandler.MY_CHAT_MEMBER))
+
+        # Forward message handler
+        application.add_handler(MessageHandler(filters.FORWARDED, handle_forwarded_message))
+
+        logger.info("✅ All handlers registered")
+
+        # Start bot with polling
+        logger.info("🤖 Bot is running! Press Ctrl+C to stop.")
+        print("🤖 Bot is running!")
+
+        # Run the bot
+        application.run_polling(
+            allowed_updates=Update.ALL_TYPES,
+            drop_pending_updates=True,
+            close_loop=False
+        )
+
+    except Exception as e:
+        logger.error(f"❌ Critical error starting bot: {e}")
+        raise
+    finally:
+        # Cleanup
         try:
-            logger.info(f"🚀 Starting bot (attempt {attempt + 1}/{max_retries})...")
-
-            # Start Flask server in a separate thread for uptimerobot
-            flask_thread = Thread(target=run_flask)
-            flask_thread.daemon = True
-            flask_thread.start()
-            logger.info("✅ Flask server started on port 5000")
-
-            # Create application
-            application = Application.builder().token(BOT_TOKEN).build()
-
-            # Initialize bot instance and store in bot_data
-            bot_instance = ChannelRegistrationBot()
-            application.bot_data['bot_instance'] = bot_instance
-
-            # Add handlers
-            application.add_handler(CommandHandler("start", start))
-            application.add_handler(CommandHandler("help", help_command))
-            application.add_handler(CommandHandler("list", list_channels))
-            application.add_handler(CommandHandler("stats", stats))
-            application.add_handler(CommandHandler("ban", admin_ban_command))
-            application.add_handler(CommandHandler("unban", admin_unban_command))
-            application.add_handler(CommandHandler("broadcast", admin_broadcast_command))
-            application.add_handler(CommandHandler("del", admin_delete_command))
-
-            # Button handler
-            application.add_handler(CallbackQueryHandler(button_handler))
-
-            # Chat member handler
-            application.add_handler(ChatMemberHandler(handle_bot_added_to_channel, ChatMemberHandler.MY_CHAT_MEMBER))
-
-            # Forward message handler
-            application.add_handler(MessageHandler(filters.FORWARDED, handle_forwarded_message))
-
-            # Start bot
-            logger.info("🤖 Bot is running! Press Ctrl+C to stop.")
-            print("🤖 Bot is running! Press Ctrl+C to stop.")
-
-            application.run_polling(
-                allowed_updates=Update.ALL_TYPES,
-                drop_pending_updates=True
-            )
-
-            break
-
-        except Exception as e:
-            logger.error(f"❌ Startup error (attempt {attempt + 1}): {e}")
-            if attempt < max_retries - 1:
-                logger.info(f"🔄 Retrying in {retry_delay} seconds...")
-                time.sleep(retry_delay)
-            else:
-                logger.error("❌ Failed to start bot after all retries")
-
-        finally:
-            # Close database
-            if application and 'bot_instance' in application.bot_data:
+            if 'application' in locals() and 'bot_instance' in application.bot_data:
                 application.bot_data['bot_instance'].db.close()
+                logger.info("✅ Database connection closed")
+        except Exception as e:
+            logger.error(f"Error during cleanup: {e}")
 
 if __name__ == '__main__':
     main()
